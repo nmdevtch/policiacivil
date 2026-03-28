@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const express = require('express');
 const {
   Client,
   GatewayIntentBits,
@@ -12,6 +13,19 @@ const {
   Events
 } = require('discord.js');
 
+// 🌐 SERVIDOR WEB (OBRIGATÓRIO NO RENDER WEB SERVICE)
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('Bot online ✅');
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server rodando na porta ${PORT}`);
+});
+
+// 🤖 CLIENTE DISCORD
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -58,125 +72,143 @@ Clique no botão abaixo para solicitar sua setagem.
 // 🔘 INTERAÇÕES
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // 👉 ABRIR MODAL
-  if (interaction.isButton() && interaction.customId === 'solicitar_setagem') {
+  try {
 
-    const modal = new ModalBuilder()
-      .setCustomId('formulario_registro')
-      .setTitle('Registro Polícia');
+    // 👉 ABRIR MODAL
+    if (interaction.isButton() && interaction.customId === 'solicitar_setagem') {
 
-    const nomeInput = new TextInputBuilder()
-      .setCustomId('nome')
-      .setLabel('Seu nome completo')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+      const modal = new ModalBuilder()
+        .setCustomId('formulario_registro')
+        .setTitle('Registro Polícia');
 
-    const idInput = new TextInputBuilder()
-      .setCustomId('id_cidade')
-      .setLabel('ID da cidade')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+      const nomeInput = new TextInputBuilder()
+        .setCustomId('nome')
+        .setLabel('Seu nome completo')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(nomeInput),
-      new ActionRowBuilder().addComponents(idInput)
-    );
+      const idInput = new TextInputBuilder()
+        .setCustomId('id_cidade')
+        .setLabel('ID da cidade')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-    return interaction.showModal(modal);
-  }
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(nomeInput),
+        new ActionRowBuilder().addComponents(idInput)
+      );
 
-  // 👉 ENVIO FORMULÁRIO
-  if (interaction.isModalSubmit() && interaction.customId === 'formulario_registro') {
+      return interaction.showModal(modal);
+    }
 
-    const nome = interaction.fields.getTextInputValue('nome');
-    const idCidade = interaction.fields.getTextInputValue('id_cidade');
+    // 👉 FORMULÁRIO
+    if (interaction.isModalSubmit() && interaction.customId === 'formulario_registro') {
 
-    const canalAdmin = await client.channels.fetch(CANAL_APROVACAO_ID);
+      const nome = interaction.fields.getTextInputValue('nome');
+      const idCidade = interaction.fields.getTextInputValue('id_cidade');
 
-    const dados = {
-      id: interaction.user.id,
-      nome,
-      cidade: idCidade
-    };
+      const canalAdmin = await client.channels.fetch(CANAL_APROVACAO_ID);
 
-    const botoes = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`aprovar|${JSON.stringify(dados)}`)
-        .setLabel('✅ Aprovar')
-        .setStyle(ButtonStyle.Success),
+      if (!canalAdmin) {
+        return interaction.reply({ content: '❌ Canal de aprovação não encontrado.', ephemeral: true });
+      }
 
-      new ButtonBuilder()
-        .setCustomId(`recusar|${JSON.stringify(dados)}`)
-        .setLabel('❌ Recusar')
-        .setStyle(ButtonStyle.Danger)
-    );
+      const dados = {
+        id: interaction.user.id,
+        nome,
+        cidade: idCidade
+      };
 
-    await canalAdmin.send({
-      content: `📋 **Nova Solicitação**
+      const botoes = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`aprovar|${JSON.stringify(dados)}`)
+          .setLabel('✅ Aprovar')
+          .setStyle(ButtonStyle.Success),
+
+        new ButtonBuilder()
+          .setCustomId(`recusar|${JSON.stringify(dados)}`)
+          .setLabel('❌ Recusar')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await canalAdmin.send({
+        content: `📋 **Nova Solicitação**
 
 👤 Usuário: <@${dados.id}>
 📛 Nome: ${dados.nome}
 🆔 ID Cidade: ${dados.cidade}`,
-      components: [botoes]
-    });
+        components: [botoes]
+      });
 
-    return interaction.reply({
-      content: '✅ Solicitação enviada!',
-      ephemeral: true
-    });
-  }
+      return interaction.reply({
+        content: '✅ Solicitação enviada!',
+        ephemeral: true
+      });
+    }
 
-  // 👉 APROVAR / RECUSAR
-  if (interaction.isButton() && interaction.customId.includes('|')) {
+    // 👉 APROVAR / RECUSAR
+    if (interaction.isButton() && interaction.customId.includes('|')) {
 
-    const [acao, dados] = interaction.customId.split('|');
-    const info = JSON.parse(dados);
+      const [acao, dados] = interaction.customId.split('|');
+      const info = JSON.parse(dados);
 
-    const membro = await interaction.guild.members.fetch(info.id);
-    const canalLogs = await client.channels.fetch(CANAL_LOGS_ID);
+      const membro = await interaction.guild.members.fetch(info.id);
+      const canalLogs = await client.channels.fetch(CANAL_LOGS_ID);
 
-    if (acao === 'aprovar') {
+      if (!membro) return;
 
-      await membro.roles.add(CARGO_ESTAGIARIO_ID);
+      if (acao === 'aprovar') {
 
-      try {
-        await membro.setNickname(`[EST] ${info.nome} | ${info.cidade}`);
-      } catch (e) {
-        console.log("Erro nickname:", e.message);
-      }
+        await membro.roles.add(CARGO_ESTAGIARIO_ID);
 
-      await canalLogs.send({
-        content: `📁 **APROVADO**
+        try {
+          await membro.setNickname(`[EST] ${info.nome} | ${info.cidade}`);
+        } catch (e) {
+          console.log("Erro nickname:", e.message);
+        }
+
+        if (canalLogs) {
+          await canalLogs.send({
+            content: `📁 **APROVADO**
 
 👤 <@${info.id}>
 📛 ${info.nome}
 🆔 ${info.cidade}
 👮 <@${interaction.user.id}>
 🕒 <t:${Math.floor(Date.now()/1000)}:F>`
-      });
+          });
+        }
 
-      return interaction.update({
-        content: `✅ Aprovado: <@${info.id}>`,
-        components: []
-      });
-    }
+        return interaction.update({
+          content: `✅ Aprovado: <@${info.id}>`,
+          components: []
+        });
+      }
 
-    if (acao === 'recusar') {
+      if (acao === 'recusar') {
 
-      await canalLogs.send({
-        content: `❌ **RECUSADO**
+        if (canalLogs) {
+          await canalLogs.send({
+            content: `❌ **RECUSADO**
 
 👤 <@${info.id}>
 📛 ${info.nome}
 👮 <@${interaction.user.id}>`
-      });
+          });
+        }
 
-      return interaction.update({
-        content: `❌ Recusado: <@${info.id}>`,
-        components: []
-      });
+        return interaction.update({
+          content: `❌ Recusado: <@${info.id}>`,
+          components: []
+        });
+      }
     }
+
+  } catch (err) {
+    console.error("Erro geral:", err);
   }
+
 });
 
+// 🔐 LOGIN
 client.login(process.env.TOKEN);
