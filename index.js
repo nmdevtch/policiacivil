@@ -13,7 +13,7 @@ const {
   Events
 } = require('discord.js');
 
-// 🌐 SERVIDOR WEB (OBRIGATÓRIO NO RENDER WEB SERVICE)
+// 🌐 WEB SERVER (Render)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -25,31 +25,23 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server rodando na porta ${PORT}`);
 });
 
-// 🤖 CLIENTE DISCORD
+// 🤖 CLIENTE DISCORD (SEM intents proibidas)
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 // ⚙️ CONFIG
 const CARGO_ESTAGIARIO_ID = "1485630417045422180";
 const CANAL_APROVACAO_ID = "1487490815151444048";
 const CANAL_LOGS_ID = "1487489523012206863";
+const CANAL_PAINEL_ID = "1485639891441418381";
 
-// ✅ ONLINE
-client.once('ready', () => {
+// ✅ ONLINE + ENVIA PAINEL AUTOMÁTICO
+client.once('ready', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
-});
 
-// 📩 COMANDO
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-
-  if (message.content === '!registro') {
+  try {
+    const canal = await client.channels.fetch(CANAL_PAINEL_ID);
 
     const botao = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -58,7 +50,7 @@ client.on('messageCreate', async (message) => {
         .setStyle(ButtonStyle.Primary)
     );
 
-    await message.channel.send({
+    await canal.send({
       content: `👮 **Registro - Polícia Civil**
 
 Clique no botão abaixo para solicitar sua setagem.
@@ -66,15 +58,17 @@ Clique no botão abaixo para solicitar sua setagem.
 ⚠️ Use seu nome real.`,
       components: [botao]
     });
+
+  } catch (err) {
+    console.log("Erro ao enviar painel:", err.message);
   }
 });
 
 // 🔘 INTERAÇÕES
 client.on(Events.InteractionCreate, async (interaction) => {
-
   try {
 
-    // 👉 ABRIR MODAL
+    // 👉 BOTÃO ABRIR MODAL
     if (interaction.isButton() && interaction.customId === 'solicitar_setagem') {
 
       const modal = new ModalBuilder()
@@ -152,10 +146,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const [acao, dados] = interaction.customId.split('|');
       const info = JSON.parse(dados);
 
-      const membro = await interaction.guild.members.fetch(info.id);
       const canalLogs = await client.channels.fetch(CANAL_LOGS_ID);
 
-      if (!membro) return;
+      let membro;
+      try {
+        membro = await interaction.guild.members.fetch(info.id);
+      } catch {
+        return interaction.reply({ content: '❌ Usuário não encontrado.', ephemeral: true });
+      }
 
       if (acao === 'aprovar') {
 
@@ -163,9 +161,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         try {
           await membro.setNickname(`[EST] ${info.nome} | ${info.cidade}`);
-        } catch (e) {
-          console.log("Erro nickname:", e.message);
-        }
+        } catch {}
 
         if (canalLogs) {
           await canalLogs.send({
@@ -206,8 +202,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   } catch (err) {
     console.error("Erro geral:", err);
-  }
 
+    if (interaction.replied || interaction.deferred) {
+      interaction.followUp({ content: '❌ Erro interno.', ephemeral: true });
+    } else {
+      interaction.reply({ content: '❌ Erro interno.', ephemeral: true });
+    }
+  }
 });
 
 // 🔐 LOGIN
