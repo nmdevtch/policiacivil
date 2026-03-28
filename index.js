@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const express = require('express');
 const {
@@ -13,7 +13,7 @@ const {
   Events
 } = require('discord.js');
 
-// 🌐 WEB SERVER (Render)
+// 🌐 WEB SERVER
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -25,12 +25,9 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server rodando na porta ${PORT}`);
 });
 
-// 🤖 CLIENTE DISCORD (INTENTS CORRETAS)
+// 🤖 CLIENTE (SEM INTENTS PRIVILEGIADAS)
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers // 🔥 necessário pro auto cargo
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 // ⚙️ CONFIG
@@ -40,14 +37,15 @@ const CANAL_APROVACAO_ID = "1487490815151444048";
 const CANAL_LOGS_ID = "1487489523012206863";
 const CANAL_PAINEL_ID = "1485639891441418381";
 
+// 📦 Banco temporário
+const registros = new Map();
+
 // ✅ ONLINE
-client.once('clientReady', async () => {
+client.once('ready', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
 
-  // 🔥 ENVIA PAINEL AUTOMÁTICO (evita duplicar toda vez)
   try {
     const canal = await client.channels.fetch(CANAL_PAINEL_ID);
-
     if (!canal) return;
 
     const mensagens = await canal.messages.fetch({ limit: 10 });
@@ -57,32 +55,20 @@ client.once('clientReady', async () => {
 
     const botao = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('solicitar_setagem')
-        .setLabel('📋 Solicitar Setagem')
+        .setCustomId('iniciar_registro')
+        .setLabel('📋 Iniciar Registro')
         .setStyle(ButtonStyle.Primary)
     );
 
     await canal.send({
-      content: `👮 **Registro - Polícia Civil**
+      content: `👮 **Sistema de Registro**
 
-Clique no botão abaixo para solicitar sua setagem.
-
-⚠️ Use seu nome real.`,
+Clique abaixo para iniciar.`,
       components: [botao]
     });
 
   } catch (err) {
-    console.log("Erro ao enviar painel:", err.message);
-  }
-});
-
-// 👤 AUTO CARGO VISITANTE
-client.on('guildMemberAdd', async (member) => {
-  try {
-    await member.roles.add(CARGO_VISITANTE_ID);
-    console.log(`👤 ${member.user.tag} recebeu Visitante`);
-  } catch (err) {
-    console.error('Erro ao dar visitante:', err.message);
+    console.log("Erro painel:", err.message);
   }
 });
 
@@ -90,68 +76,91 @@ client.on('guildMemberAdd', async (member) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
 
-    // 👉 BOTÃO ABRIR MODAL
+    // 👉 PRIMEIRO BOTÃO → DAR VISITANTE + ABRIR
+    if (interaction.isButton() && interaction.customId === 'iniciar_registro') {
+
+      const membro = await interaction.guild.members.fetch(interaction.user.id);
+
+      // 🔥 Dá visitante na interação
+      try {
+        if (!membro.roles.cache.has(CARGO_VISITANTE_ID)) {
+          await membro.roles.add(CARGO_VISITANTE_ID);
+        }
+      } catch {}
+
+      const botao = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('solicitar_setagem')
+          .setLabel('📋 Solicitar Setagem')
+          .setStyle(ButtonStyle.Success)
+      );
+
+      return interaction.reply({
+        content: '✅ Você recebeu acesso inicial.',
+        components: [botao],
+        ephemeral: true
+      });
+    }
+
+    // 👉 ABRIR MODAL
     if (interaction.isButton() && interaction.customId === 'solicitar_setagem') {
 
       const modal = new ModalBuilder()
         .setCustomId('formulario_registro')
         .setTitle('Registro Polícia');
 
-      const nomeInput = new TextInputBuilder()
-        .setCustomId('nome')
-        .setLabel('Seu nome completo')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const idInput = new TextInputBuilder()
-        .setCustomId('id_cidade')
-        .setLabel('ID da cidade')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
       modal.addComponents(
-        new ActionRowBuilder().addComponents(nomeInput),
-        new ActionRowBuilder().addComponents(idInput)
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('nome')
+            .setLabel('Seu nome completo')
+            .setStyle(TextInputStyle.Short)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('id_cidade')
+            .setLabel('ID da cidade')
+            .setStyle(TextInputStyle.Short)
+        )
       );
 
       return interaction.showModal(modal);
     }
 
     // 👉 FORMULÁRIO
-    if (interaction.isModalSubmit() && interaction.customId === 'formulario_registro') {
+    if (interaction.isModalSubmit()) {
 
       const nome = interaction.fields.getTextInputValue('nome');
-      const idCidade = interaction.fields.getTextInputValue('id_cidade');
+      const cidade = interaction.fields.getTextInputValue('id_cidade');
 
-      const canalAdmin = await client.channels.fetch(CANAL_APROVACAO_ID);
-      if (!canalAdmin) {
-        return interaction.reply({ content: '❌ Canal não encontrado.', ephemeral: true });
-      }
+      const idRegistro = Date.now().toString();
 
-      const dados = {
-        id: interaction.user.id,
+      registros.set(idRegistro, {
+        userId: interaction.user.id,
         nome,
-        cidade: idCidade
-      };
+        cidade
+      });
+
+      const canal = await client.channels.fetch(CANAL_APROVACAO_ID);
 
       const botoes = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`aprovar|${JSON.stringify(dados)}`)
+          .setCustomId(`aprovar_${idRegistro}`)
           .setLabel('✅ Aprovar')
           .setStyle(ButtonStyle.Success),
 
         new ButtonBuilder()
-          .setCustomId(`recusar|${JSON.stringify(dados)}`)
+          .setCustomId(`recusar_${idRegistro}`)
           .setLabel('❌ Recusar')
           .setStyle(ButtonStyle.Danger)
       );
 
-      await canalAdmin.send({
-        content: `📋 **Nova Solicitação**
+      await canal.send({
+        content: `📋 Nova Solicitação
 
-👤 <@${dados.id}>
-📛 ${dados.nome}
-🆔 ${dados.cidade}`,
+👤 <@${interaction.user.id}>
+📛 ${nome}
+🆔 ${cidade}`,
         components: [botoes]
       });
 
@@ -162,73 +171,51 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // 👉 APROVAR / RECUSAR
-    if (interaction.isButton() && interaction.customId.includes('|')) {
+    if (interaction.isButton() && interaction.customId.includes('_')) {
 
-      const [acao, dados] = interaction.customId.split('|');
-      const info = JSON.parse(dados);
+      const [acao, idRegistro] = interaction.customId.split('_');
+      const dados = registros.get(idRegistro);
 
-      const canalLogs = await client.channels.fetch(CANAL_LOGS_ID);
-
-      let membro;
-      try {
-        membro = await interaction.guild.members.fetch(info.id);
-      } catch {
-        return interaction.reply({ content: '❌ Usuário não encontrado.', ephemeral: true });
+      if (!dados) {
+        return interaction.reply({ content: '❌ Dados não encontrados.', ephemeral: true });
       }
+
+      const membro = await interaction.guild.members.fetch(dados.userId);
+      const logs = await client.channels.fetch(CANAL_LOGS_ID);
 
       if (acao === 'aprovar') {
 
         await membro.roles.add(CARGO_ESTAGIARIO_ID);
 
         try {
-          await membro.setNickname(`[EST] ${info.nome} | ${info.cidade}`);
+          await membro.setNickname(`[EST] ${dados.nome} | ${dados.cidade}`);
         } catch {}
 
-        if (canalLogs) {
-          await canalLogs.send({
-            content: `📁 **APROVADO**
+        logs?.send(`✅ Aprovado: <@${dados.userId}>`);
 
-👤 <@${info.id}>
-📛 ${info.nome}
-🆔 ${info.cidade}
-👮 <@${interaction.user.id}>
-🕒 <t:${Math.floor(Date.now()/1000)}:F>`
-          });
-        }
+        registros.delete(idRegistro);
 
         return interaction.update({
-          content: `✅ Aprovado: <@${info.id}>`,
+          content: `✅ Aprovado: <@${dados.userId}>`,
           components: []
         });
       }
 
       if (acao === 'recusar') {
 
-        if (canalLogs) {
-          await canalLogs.send({
-            content: `❌ **RECUSADO**
+        logs?.send(`❌ Recusado: <@${dados.userId}>`);
 
-👤 <@${info.id}>
-📛 ${info.nome}
-👮 <@${interaction.user.id}>`
-          });
-        }
+        registros.delete(idRegistro);
 
         return interaction.update({
-          content: `❌ Recusado: <@${info.id}>`,
+          content: `❌ Recusado: <@${dados.userId}>`,
           components: []
         });
       }
     }
 
   } catch (err) {
-    console.error("Erro geral:", err);
-
-    if (interaction.replied || interaction.deferred) {
-      interaction.followUp({ content: '❌ Erro interno.', ephemeral: true });
-    } else {
-      interaction.reply({ content: '❌ Erro interno.', ephemeral: true });
-    }
+    console.error("Erro:", err);
   }
 });
 
