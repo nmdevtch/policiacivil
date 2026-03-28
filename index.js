@@ -25,23 +25,35 @@ app.listen(PORT, () => {
   console.log(`🌐 Web server rodando na porta ${PORT}`);
 });
 
-// 🤖 CLIENTE DISCORD (SEM intents proibidas)
+// 🤖 CLIENTE DISCORD (INTENTS CORRETAS)
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers // 🔥 necessário pro auto cargo
+  ]
 });
 
 // ⚙️ CONFIG
 const CARGO_ESTAGIARIO_ID = "1485630417045422180";
+const CARGO_VISITANTE_ID = "COLOQUE_ID_VISITANTE_AQUI";
 const CANAL_APROVACAO_ID = "1487490815151444048";
 const CANAL_LOGS_ID = "1487489523012206863";
 const CANAL_PAINEL_ID = "1485639891441418381";
 
-// ✅ ONLINE + ENVIA PAINEL AUTOMÁTICO
-client.once('ready', async () => {
+// ✅ ONLINE
+client.once('clientReady', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
 
+  // 🔥 ENVIA PAINEL AUTOMÁTICO (evita duplicar toda vez)
   try {
     const canal = await client.channels.fetch(CANAL_PAINEL_ID);
+
+    if (!canal) return;
+
+    const mensagens = await canal.messages.fetch({ limit: 10 });
+    const jaExiste = mensagens.find(m => m.author.id === client.user.id);
+
+    if (jaExiste) return;
 
     const botao = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -61,6 +73,16 @@ Clique no botão abaixo para solicitar sua setagem.
 
   } catch (err) {
     console.log("Erro ao enviar painel:", err.message);
+  }
+});
+
+// 👤 AUTO CARGO VISITANTE
+client.on('guildMemberAdd', async (member) => {
+  try {
+    await member.roles.add(CARGO_VISITANTE_ID);
+    console.log(`👤 ${member.user.tag} recebeu Visitante`);
+  } catch (err) {
+    console.error('Erro ao dar visitante:', err.message);
   }
 });
 
@@ -102,9 +124,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const idCidade = interaction.fields.getTextInputValue('id_cidade');
 
       const canalAdmin = await client.channels.fetch(CANAL_APROVACAO_ID);
-
       if (!canalAdmin) {
-        return interaction.reply({ content: '❌ Canal de aprovação não encontrado.', ephemeral: true });
+        return interaction.reply({ content: '❌ Canal não encontrado.', ephemeral: true });
       }
 
       const dados = {
@@ -128,9 +149,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await canalAdmin.send({
         content: `📋 **Nova Solicitação**
 
-👤 Usuário: <@${dados.id}>
-📛 Nome: ${dados.nome}
-🆔 ID Cidade: ${dados.cidade}`,
+👤 <@${dados.id}>
+📛 ${dados.nome}
+🆔 ${dados.cidade}`,
         components: [botoes]
       });
 
