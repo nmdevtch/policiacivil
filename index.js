@@ -7,19 +7,19 @@ const {
   Partials,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  EmbedBuilder,
+  Events
 } = require("discord.js");
 
 const config = require("./config.json");
 
-// 🌐 Web server (Render + UptimeRobot)
+// 🌐 Web server (Render)
 const app = express();
 app.get("/", (req, res) => res.send("Bot Online 🚔"));
+app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server ativo"));
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🌐 Web server ativo"));
-
-// 🤖 Cliente Discord
+// 🤖 Cliente
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -30,25 +30,82 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel]
 });
 
-// ✅ CORRIGIDO (sem warning)
-client.once("clientReady", (client) => {
-  console.log(`✅ Bot online: ${client.user.tag}`);
-});
-
-// 📂 Banco de dados seguro
+// 📂 Banco
 function loadDB() {
-  try {
-    return JSON.parse(fs.readFileSync("./database.json"));
-  } catch {
-    return { usuarios: [] };
-  }
+  return JSON.parse(fs.readFileSync("./database.json"));
 }
 
 function saveDB(data) {
   fs.writeFileSync("./database.json", JSON.stringify(data, null, 2));
 }
 
-// 📥 RECEBER FORMULÁRIO
+// ✅ READY (AUTO PAINEL)
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Bot online: ${client.user.tag}`);
+
+  try {
+    const canal = await client.channels.fetch(config.canais.comece_aqui);
+
+    // 🧹 (Opcional) limpar mensagens antigas
+    const msgs = await canal.messages.fetch({ limit: 10 });
+    await canal.bulkDelete(msgs);
+
+    // 📦 Embed
+    const embed = new EmbedBuilder()
+      .setColor("#2b2d31")
+      .setTitle("👮 Registro - Polícia Civil")
+      .setDescription(
+`Clique no botão abaixo para solicitar sua setagem. Sua solicitação será analisada por um administrador.
+
+📋 **Como Funciona**
+1. Clique em "Se Registrar"
+2. Preencha seu nome
+3. Informe seu ID
+4. Aguarde aprovação
+
+⚠️ **Importante**
+• Use seu nome real  
+• ID deve ser numérico  
+• Aguarde análise`
+      )
+      .setFooter({ text: "Sistema de Registro • Polícia Civil" });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("registrar")
+        .setLabel("📄 Se Registrar")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await canal.send({
+      embeds: [embed],
+      components: [row]
+    });
+
+  } catch (err) {
+    console.log("Erro ao enviar painel:", err);
+  }
+});
+
+// 📌 BOTÃO REGISTRAR
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  if (interaction.customId === "registrar") {
+    await interaction.reply({
+      content: `📋 Envie o formulário neste canal:
+
+**Modelo:**
+Nome:
+ID:
+Telefone:
+Recrutador:`,
+      ephemeral: true
+    });
+  }
+});
+
+// 📥 FORMULÁRIO
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (message.channel.id !== config.canais.formulario) return;
@@ -59,7 +116,7 @@ client.on("messageCreate", async (message) => {
   const recrutador = message.content.match(/Recrutador:\s*(.*)/i)?.[1];
 
   if (!nome || !id) {
-    return message.reply("❌ Use o formato:\nNome:\nID:\nTelefone:\nRecrutador:");
+    return message.reply("❌ Preencha corretamente.");
   }
 
   const db = loadDB();
@@ -70,8 +127,7 @@ client.on("messageCreate", async (message) => {
     passaporte: id,
     telefone,
     recrutador,
-    status: "EM_ANALISE",
-    cargo: "Visitante"
+    status: "EM_ANALISE"
   });
 
   saveDB(db);
@@ -89,15 +145,18 @@ client.on("messageCreate", async (message) => {
       .setStyle(ButtonStyle.Danger)
   );
 
-  await canalAnalise.send({
-    content: `
-📥 NOVA CANDIDATURA
+  const embed = new EmbedBuilder()
+    .setColor("Yellow")
+    .setTitle("📥 Nova Candidatura")
+    .addFields(
+      { name: "👤 Nome", value: nome },
+      { name: "🆔 ID", value: id },
+      { name: "📞 Telefone", value: telefone || "N/A" },
+      { name: "🧑‍💼 Recrutador", value: recrutador || "N/A" }
+    );
 
-👤 Nome: ${nome}
-🆔 ID: ${id}
-📞 Telefone: ${telefone || "N/A"}
-🧑‍💼 Recrutador: ${recrutador || "N/A"}
-    `,
+  canalAnalise.send({
+    embeds: [embed],
     components: [row]
   });
 
@@ -109,72 +168,33 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isButton()) return;
 
   const [acao, userId] = interaction.customId.split("_");
+  if (!userId) return;
 
   const db = loadDB();
   const userData = db.usuarios.find(u => u.discordId === userId);
 
-  if (!userData) {
-    return interaction.reply({ content: "❌ Usuário não encontrado.", ephemeral: true });
-  }
+  if (!userData) return;
 
   const membro = await interaction.guild.members.fetch(userId);
 
-  // ✅ APROVAR
   if (acao === "aprovar") {
-    await membro.roles.remove(config.cargos.visitante).catch(() => {});
-    await membro.roles.add(config.cargos.aluno).catch(() => {});
+    await membro.roles.remove(config.cargos.visitante);
+    await membro.roles.add(config.cargos.aluno);
 
-    await membro.setNickname(`[AL] ${userData.nome} | ${userData.passaporte}`).catch(() => {});
+    await membro.setNickname(`[AL] ${userData.nome} | ${userData.passaporte}`);
 
     userData.status = "APROVADO";
-    userData.cargo = "Aluno";
-
     saveDB(db);
 
-    await client.channels.fetch(config.canais.aprovados)
-      .then(c => c.send(`✅ ${userData.nome} | ${userData.passaporte} aprovado.`));
-
-    await client.channels.fetch(config.canais.interno)
-      .then(c => c.send(`
-📁 REGISTRO INTERNO
-
-👤 Nome: ${userData.nome}
-🆔 ID: ${userData.passaporte}
-📞 ${userData.telefone || "N/A"}
-🧑‍💼 ${userData.recrutador || "N/A"}
-
-STATUS: APROVADO
-      `));
-
-    await client.channels.fetch(config.canais.logs)
-      .then(c => c.send(`📊 ${userData.nome} aprovado.`));
-
-    await client.channels.fetch(config.canais.logs_bot)
-      .then(c => c.send(`⚙️ Aprovado: ${userData.nome}`));
-
-    await interaction.update({
-      content: "✅ APROVADO",
-      components: []
-    });
+    await interaction.update({ content: "✅ APROVADO", components: [] });
   }
 
-  // ❌ REPROVAR
   if (acao === "reprovar") {
     userData.status = "REPROVADO";
     saveDB(db);
 
-    await client.channels.fetch(config.canais.reprovados)
-      .then(c => c.send(`❌ ${userData.nome} | ${userData.passaporte} reprovado.`));
-
-    await client.channels.fetch(config.canais.logs_bot)
-      .then(c => c.send(`⚙️ Reprovado: ${userData.nome}`));
-
-    await interaction.update({
-      content: "❌ REPROVADO",
-      components: []
-    });
+    await interaction.update({ content: "❌ REPROVADO", components: [] });
   }
 });
 
-// 🚀 LOGIN
 client.login(process.env.TOKEN);
