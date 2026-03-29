@@ -1,223 +1,176 @@
-require('dotenv').config({ quiet: true });
-
-const express = require('express');
+require("dotenv").config();
+const fs = require("fs");
+const express = require("express");
 const {
   Client,
   GatewayIntentBits,
+  Partials,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  Events
-} = require('discord.js');
+  ButtonStyle
+} = require("discord.js");
 
-// 🌐 WEB SERVER
+const config = require("./config.json");
+
+// 🌐 Anti-sleep
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => res.send("Bot Online 🚔"));
+app.listen(3000, () => console.log("🌐 Web server ativo"));
 
-app.get('/', (req, res) => {
-  res.send('Bot online ✅');
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Web server rodando na porta ${PORT}`);
-});
-
-// 🤖 CLIENTE (SEM INTENTS PRIVILEGIADAS)
+// 🤖 Cliente
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
+  ],
+  partials: [Partials.Message, Partials.Channel]
 });
 
-// ⚙️ CONFIG
-const CARGO_ESTAGIARIO_ID = "1485630417045422180";
-const CARGO_VISITANTE_ID = "1485630755525759007";
-const CANAL_APROVACAO_ID = "1487490815151444048";
-const CANAL_LOGS_ID = "1487489523012206863";
-const CANAL_PAINEL_ID = "1485639891441418381";
-
-// 📦 Banco temporário
-const registros = new Map();
-
-// ✅ ONLINE
-client.once('ready', async () => {
+client.once("ready", () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
+});
 
-  try {
-    const canal = await client.channels.fetch(CANAL_PAINEL_ID);
-    if (!canal) return;
+// 📂 Banco de dados
+function loadDB() {
+  return JSON.parse(fs.readFileSync("./database.json"));
+}
 
-    const mensagens = await canal.messages.fetch({ limit: 10 });
-    const jaExiste = mensagens.find(m => m.author.id === client.user.id);
+function saveDB(data) {
+  fs.writeFileSync("./database.json", JSON.stringify(data, null, 2));
+}
 
-    if (jaExiste) return;
+// 📥 RECEBER FORMULÁRIO
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.channel.id !== config.canais.formulario) return;
 
-    const botao = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('iniciar_registro')
-        .setLabel('📋 Iniciar Registro')
-        .setStyle(ButtonStyle.Primary)
-    );
+  const nome = message.content.match(/Nome:\s*(.*)/i)?.[1];
+  const id = message.content.match(/ID:\s*(.*)/i)?.[1];
+  const telefone = message.content.match(/Telefone:\s*(.*)/i)?.[1];
+  const recrutador = message.content.match(/Recrutador:\s*(.*)/i)?.[1];
 
-    await canal.send({
-      content: `👮 **Sistema de Registro**
+  if (!nome || !id) {
+    return message.reply("❌ Use o formato:\nNome:\nID:\nTelefone:\nRecrutador:");
+  }
 
-Clique abaixo para iniciar.`,
-      components: [botao]
+  const db = loadDB();
+
+  db.usuarios.push({
+    discordId: message.author.id,
+    nome,
+    passaporte: id,
+    telefone,
+    recrutador,
+    status: "EM_ANALISE",
+    cargo: "Visitante"
+  });
+
+  saveDB(db);
+
+  const canalAnalise = await client.channels.fetch(config.canais.analise);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`aprovar_${message.author.id}`)
+      .setLabel("✅ Aprovar")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`reprovar_${message.author.id}`)
+      .setLabel("❌ Reprovar")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  await canalAnalise.send({
+    content: `
+📥 NOVA CANDIDATURA
+
+👤 Nome: ${nome}
+🆔 ID: ${id}
+📞 Telefone: ${telefone || "N/A"}
+🧑‍💼 Recrutador: ${recrutador || "N/A"}
+    `,
+    components: [row]
+  });
+
+  message.reply("📨 Enviado para análise!");
+});
+
+// 🎯 BOTÕES
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const [acao, userId] = interaction.customId.split("_");
+
+  const db = loadDB();
+  const userData = db.usuarios.find(u => u.discordId === userId);
+
+  if (!userData) {
+    return interaction.reply({ content: "❌ Usuário não encontrado.", ephemeral: true });
+  }
+
+  const membro = await interaction.guild.members.fetch(userId);
+
+  // ✅ APROVAR
+  if (acao === "aprovar") {
+    await membro.roles.remove(config.cargos.visitante);
+    await membro.roles.add(config.cargos.aluno);
+
+    await membro.setNickname(`[AL] ${userData.nome} | ${userData.passaporte}`);
+
+    userData.status = "APROVADO";
+    userData.cargo = "Aluno";
+
+    saveDB(db);
+
+    // 📊 Canal aprovados
+    const canalAprovados = await client.channels.fetch(config.canais.aprovados);
+    canalAprovados.send(`✅ ${userData.nome} | ${userData.passaporte} aprovado.`);
+
+    // 🔒 Canal interno
+    const canalInterno = await client.channels.fetch(config.canais.interno);
+    canalInterno.send(`
+📁 REGISTRO INTERNO
+
+👤 Nome: ${userData.nome}
+🆔 ID: ${userData.passaporte}
+📞 ${userData.telefone || "N/A"}
+🧑‍💼 ${userData.recrutador || "N/A"}
+
+STATUS: APROVADO
+    `);
+
+    // 📊 Logs gerais
+    const canalLogs = await client.channels.fetch(config.canais.logs);
+    canalLogs.send(`📊 ${userData.nome} aprovado.`);
+
+    // 🤖 Logs bot
+    const logBot = await client.channels.fetch(config.canais.logs_bot);
+    logBot.send(`⚙️ Aprovado: ${userData.nome}`);
+
+    await interaction.update({
+      content: "✅ APROVADO",
+      components: []
     });
+  }
 
-  } catch (err) {
-    console.log("Erro painel:", err.message);
+  // ❌ REPROVAR
+  if (acao === "reprovar") {
+    userData.status = "REPROVADO";
+    saveDB(db);
+
+    const canalReprovados = await client.channels.fetch(config.canais.reprovados);
+    canalReprovados.send(`❌ ${userData.nome} | ${userData.passaporte} reprovado.`);
+
+    const logBot = await client.channels.fetch(config.canais.logs_bot);
+    logBot.send(`⚙️ Reprovado: ${userData.nome}`);
+
+    await interaction.update({
+      content: "❌ REPROVADO",
+      components: []
+    });
   }
 });
 
-// 🔘 INTERAÇÕES
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-
-    // 👉 PRIMEIRO BOTÃO → DAR VISITANTE + ABRIR
-    if (interaction.isButton() && interaction.customId === 'iniciar_registro') {
-
-      const membro = await interaction.guild.members.fetch(interaction.user.id);
-
-      // 🔥 Dá visitante na interação
-      try {
-        if (!membro.roles.cache.has(CARGO_VISITANTE_ID)) {
-          await membro.roles.add(CARGO_VISITANTE_ID);
-        }
-      } catch {}
-
-      const botao = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('solicitar_setagem')
-          .setLabel('📋 Solicitar Setagem')
-          .setStyle(ButtonStyle.Success)
-      );
-
-      return interaction.reply({
-        content: '✅ Você recebeu acesso inicial.',
-        components: [botao],
-        ephemeral: true
-      });
-    }
-
-    // 👉 ABRIR MODAL
-    if (interaction.isButton() && interaction.customId === 'solicitar_setagem') {
-
-      const modal = new ModalBuilder()
-        .setCustomId('formulario_registro')
-        .setTitle('Registro Polícia');
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('nome')
-            .setLabel('Seu nome completo')
-            .setStyle(TextInputStyle.Short)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('id_cidade')
-            .setLabel('ID da cidade')
-            .setStyle(TextInputStyle.Short)
-        )
-      );
-
-      return interaction.showModal(modal);
-    }
-
-    // 👉 FORMULÁRIO
-    if (interaction.isModalSubmit()) {
-
-      const nome = interaction.fields.getTextInputValue('nome');
-      const cidade = interaction.fields.getTextInputValue('id_cidade');
-
-      const idRegistro = Date.now().toString();
-
-      registros.set(idRegistro, {
-        userId: interaction.user.id,
-        nome,
-        cidade
-      });
-
-      const canal = await client.channels.fetch(CANAL_APROVACAO_ID);
-
-      const botoes = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`aprovar_${idRegistro}`)
-          .setLabel('✅ Aprovar')
-          .setStyle(ButtonStyle.Success),
-
-        new ButtonBuilder()
-          .setCustomId(`recusar_${idRegistro}`)
-          .setLabel('❌ Recusar')
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      await canal.send({
-        content: `📋 Nova Solicitação
-
-👤 <@${interaction.user.id}>
-📛 ${nome}
-🆔 ${cidade}`,
-        components: [botoes]
-      });
-
-      return interaction.reply({
-        content: '✅ Solicitação enviada!',
-        ephemeral: true
-      });
-    }
-
-    // 👉 APROVAR / RECUSAR
-    if (interaction.isButton() && interaction.customId.includes('_')) {
-
-      const [acao, idRegistro] = interaction.customId.split('_');
-      const dados = registros.get(idRegistro);
-
-      if (!dados) {
-        return interaction.reply({ content: '❌ Dados não encontrados.', ephemeral: true });
-      }
-
-      const membro = await interaction.guild.members.fetch(dados.userId);
-      const logs = await client.channels.fetch(CANAL_LOGS_ID);
-
-      if (acao === 'aprovar') {
-
-        await membro.roles.add(CARGO_ESTAGIARIO_ID);
-
-        try {
-          await membro.setNickname(`[EST] ${dados.nome} | ${dados.cidade}`);
-        } catch {}
-
-        logs?.send(`✅ Aprovado: <@${dados.userId}>`);
-
-        registros.delete(idRegistro);
-
-        return interaction.update({
-          content: `✅ Aprovado: <@${dados.userId}>`,
-          components: []
-        });
-      }
-
-      if (acao === 'recusar') {
-
-        logs?.send(`❌ Recusado: <@${dados.userId}>`);
-
-        registros.delete(idRegistro);
-
-        return interaction.update({
-          content: `❌ Recusado: <@${dados.userId}>`,
-          components: []
-        });
-      }
-    }
-
-  } catch (err) {
-    console.error("Erro:", err);
-  }
-});
-
-// 🔐 LOGIN
 client.login(process.env.TOKEN);
