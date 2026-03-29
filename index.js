@@ -12,12 +12,14 @@ const {
 
 const config = require("./config.json");
 
-// 🌐 Anti-sleep
+// 🌐 Web server (Render + UptimeRobot)
 const app = express();
 app.get("/", (req, res) => res.send("Bot Online 🚔"));
-app.listen(3000, () => console.log("🌐 Web server ativo"));
 
-// 🤖 Cliente
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("🌐 Web server ativo"));
+
+// 🤖 Cliente Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -28,13 +30,18 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel]
 });
 
-client.once("ready", () => {
+// ✅ CORRIGIDO (sem warning)
+client.once("clientReady", (client) => {
   console.log(`✅ Bot online: ${client.user.tag}`);
 });
 
-// 📂 Banco de dados
+// 📂 Banco de dados seguro
 function loadDB() {
-  return JSON.parse(fs.readFileSync("./database.json"));
+  try {
+    return JSON.parse(fs.readFileSync("./database.json"));
+  } catch {
+    return { usuarios: [] };
+  }
 }
 
 function saveDB(data) {
@@ -114,23 +121,21 @@ client.on("interactionCreate", async (interaction) => {
 
   // ✅ APROVAR
   if (acao === "aprovar") {
-    await membro.roles.remove(config.cargos.visitante);
-    await membro.roles.add(config.cargos.aluno);
+    await membro.roles.remove(config.cargos.visitante).catch(() => {});
+    await membro.roles.add(config.cargos.aluno).catch(() => {});
 
-    await membro.setNickname(`[AL] ${userData.nome} | ${userData.passaporte}`);
+    await membro.setNickname(`[AL] ${userData.nome} | ${userData.passaporte}`).catch(() => {});
 
     userData.status = "APROVADO";
     userData.cargo = "Aluno";
 
     saveDB(db);
 
-    // 📊 Canal aprovados
-    const canalAprovados = await client.channels.fetch(config.canais.aprovados);
-    canalAprovados.send(`✅ ${userData.nome} | ${userData.passaporte} aprovado.`);
+    await client.channels.fetch(config.canais.aprovados)
+      .then(c => c.send(`✅ ${userData.nome} | ${userData.passaporte} aprovado.`));
 
-    // 🔒 Canal interno
-    const canalInterno = await client.channels.fetch(config.canais.interno);
-    canalInterno.send(`
+    await client.channels.fetch(config.canais.interno)
+      .then(c => c.send(`
 📁 REGISTRO INTERNO
 
 👤 Nome: ${userData.nome}
@@ -139,15 +144,13 @@ client.on("interactionCreate", async (interaction) => {
 🧑‍💼 ${userData.recrutador || "N/A"}
 
 STATUS: APROVADO
-    `);
+      `));
 
-    // 📊 Logs gerais
-    const canalLogs = await client.channels.fetch(config.canais.logs);
-    canalLogs.send(`📊 ${userData.nome} aprovado.`);
+    await client.channels.fetch(config.canais.logs)
+      .then(c => c.send(`📊 ${userData.nome} aprovado.`));
 
-    // 🤖 Logs bot
-    const logBot = await client.channels.fetch(config.canais.logs_bot);
-    logBot.send(`⚙️ Aprovado: ${userData.nome}`);
+    await client.channels.fetch(config.canais.logs_bot)
+      .then(c => c.send(`⚙️ Aprovado: ${userData.nome}`));
 
     await interaction.update({
       content: "✅ APROVADO",
@@ -160,11 +163,11 @@ STATUS: APROVADO
     userData.status = "REPROVADO";
     saveDB(db);
 
-    const canalReprovados = await client.channels.fetch(config.canais.reprovados);
-    canalReprovados.send(`❌ ${userData.nome} | ${userData.passaporte} reprovado.`);
+    await client.channels.fetch(config.canais.reprovados)
+      .then(c => c.send(`❌ ${userData.nome} | ${userData.passaporte} reprovado.`));
 
-    const logBot = await client.channels.fetch(config.canais.logs_bot);
-    logBot.send(`⚙️ Reprovado: ${userData.nome}`);
+    await client.channels.fetch(config.canais.logs_bot)
+      .then(c => c.send(`⚙️ Reprovado: ${userData.nome}`));
 
     await interaction.update({
       content: "❌ REPROVADO",
@@ -173,4 +176,5 @@ STATUS: APROVADO
   }
 });
 
+// 🚀 LOGIN
 client.login(process.env.TOKEN);
